@@ -6,6 +6,8 @@ from src.models.user import User
 from src.models.source import Source
 from src.models.record import Record
 from src.models.run import Run
+from src.models.attribution import Attribution
+from src.models.comparison import Comparison
 from src.models import note,audit
 from src.utils.security import hash_password
 from src.utils.serialization import now
@@ -31,9 +33,9 @@ def seed_values(kind,index,batch,rng):
         return {'visitor':f'V{uid+1:03}','exhibit':f'E{exhibit+1:02}','rating':round(max(1,min(5,3+(1 if exhibit%3==uid%3 else -.4)+rng.gauss(0,.55))),1)}
 
 def counts(db):
-    return {cls.__tablename__:db.scalar(select(func.count()).select_from(cls)) for cls in (User,Source,Record,Run)}
+    return {cls.__tablename__:db.scalar(select(func.count()).select_from(cls)) for cls in (User,Source,Record,Run,Attribution,Comparison)}
 def seed():
-    Base.metadata.create_all(engine);rng=random.Random(42);queued=[]
+    Base.metadata.create_all(engine);rng=random.Random(42);queued=[];queued_comparisons=[]
     with Session() as db:
         for role in ('admin','analyst','viewer'):
             email=role+'@'+CONFIG['slug']+'.demo'
@@ -49,11 +51,28 @@ def seed():
                 if not db.scalar(select(Record.id).where(Record.source_id==source.id,Record.reference==reference)):
                     db.add(Record(source_id=source.id,reference=reference,values=validate_record(vals)))
             db.flush()
+            if not db.scalar(select(Attribution.id).where(Attribution.source_id==source.id,Attribution.version==1)):
+                refs=[r.reference for r in db.scalars(select(Record).where(Record.source_id==source.id).order_by(Record.id))]
+                mapping={ref:f'{key}-B{(i//2)+1:03}' for i,ref in enumerate(refs)}
+                db.add(Attribution(source_id=source.id,version=1,note='初始归属：相邻两条样本同轴承',mapping=mapping,created_at=now()))
             if batch==0 and not db.scalar(select(Run.id).where(Run.name=='首轮种子研究')):
                 records=[{'id':r.id,'source_id':r.source_id,'reference':r.reference,'values':r.values} for r in db.scalars(select(Record).where(Record.source_id==source.id).order_by(Record.id))]
                 run=Run(source_id=source.id,name='首轮种子研究',state='queued',parameters=CONFIG['default_parameters'],snapshot={'source':{'id':source.id,'name':source.name,'filename':source.filename},'records':records},created_at=now());db.add(run);db.flush();queued.append(run.id)
+            if batch==0 and not db.scalar(select(Run.id).where(Run.name=='首轮对照研究')):
+                records=[{'id':r.id,'source_id':r.source_id,'reference':r.reference,'values':r.values} for r in db.scalars(select(Record).where(Record.source_id==source.id).order_by(Record.id))]
+                run=Run(source_id=source.id,name='首轮对照研究',state='queued',parameters={'folds':5,'smoothing':CONFIG['default_parameters']['smoothing']},snapshot={'source':{'id':source.id,'name':source.name,'filename':source.filename},'records':records},created_at=now());db.add(run);db.flush();queued.append(run.id)
         db.commit();print(json.dumps(counts(db),ensure_ascii=False))
+        with Session() as db2:
+            if not db2.scalar(select(Comparison.id).where(Comparison.name=='首轮漏判换位检验')):
+                ra=db2.scalar(select(Run).where(Run.name=='首轮种子研究'));rb=db2.scalar(select(Run).where(Run.name=='首轮对照研究'))
+                first=db2.scalar(select(Source).where(Source.key==CONFIG['code']+'-202611-01'))
+                if ra and rb and first and db2.scalar(select(Attribution.id).where(Attribution.source_id==first.id,Attribution.version==1)):
+                    c=Comparison(source_id=first.id,run_a_id=ra.id,run_b_id=rb.id,name='首轮漏判换位检验',fault_a='轴承磨损',fault_b='转子偏心',attribution_version=1,state='queued',seed=20261101,samples=CONFIG['compare_defaults']['samples'],created_at=now())
+                    db2.add(c);db2.flush();queued_comparisons.append(c.id);db2.commit()
     for id in queued:
         try:queue.rpush('analysis:queue',id)
+        except Exception:logging.exception('seed queue unavailable')
+    for id in queued_comparisons:
+        try:queue.rpush('comparison:queue',id)
         except Exception:logging.exception('seed queue unavailable')
 if __name__=='__main__':seed()

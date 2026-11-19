@@ -21,6 +21,13 @@ export const domain = {
   "record_table": "acoustic_samples",
   "run_table": "classifier_runs",
   "note_table": "inspection_notes",
+  "attribution_table": "bearing_attributions",
+  "comparison_table": "comparison_jobs",
+  "compare_defaults": {
+    "samples": 200000,
+    "min_samples": 10000,
+    "max_samples": 5000000
+  },
   "eyebrow": "TONAL ARCHIVE / 41",
   "headline": "从声学特征，找到复检线索。",
   "subtitle": "桐弦声检组 · 电机试验台的三类故障判读",
